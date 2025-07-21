@@ -5,6 +5,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QScreen
 import sys
 from datetime import datetime
+import logging
 
 from auth import auth_manager
 from logger import ActivityLogger
@@ -20,6 +21,9 @@ from ui.campaigns_window import CampaignsWindow
 from ui.reports_window import ReportsWindow
 from ui.settings_window import SettingsWindow
 
+# Crear instancia del logger
+logger = logging.getLogger(__name__)
+
 class MainWindow(QMainWindow):
     logout_signal = pyqtSignal()
     
@@ -27,8 +31,25 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.scheduler = MessageScheduler()
         self.activity_logger = None
+        self.file_server = None
         self.init_ui()
         self.setup_connections()
+        
+        # Iniciar servidor local de archivos
+        try:
+            from local_file_server import file_server
+            self.file_server = file_server
+            self.file_server.start()
+            logger.info("Servidor local de archivos iniciado correctamente")
+        except Exception as e:
+            logger.error(f"Error iniciando servidor de archivos: {e}")
+            QMessageBox.warning(
+                self,
+                "Advertencia",
+                "No se pudo iniciar el servidor de archivos.\n"
+                "Los archivos adjuntos no funcionarán correctamente.\n\n"
+                f"Error: {str(e)}"
+            )
         
         # Iniciar scheduler
         self.scheduler.start()
@@ -372,6 +393,13 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             # Detener scheduler
             self.scheduler.stop()
+            
+            # Detener servidor de archivos si existe
+            if self.file_server:
+                try:
+                    self.file_server.stop()
+                except:
+                    pass
             
             # Registrar cierre
             if self.activity_logger:

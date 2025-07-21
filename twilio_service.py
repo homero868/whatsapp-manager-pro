@@ -1,3 +1,5 @@
+# Actualización de twilio_service.py para soportar archivos adjuntos
+
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
 import logging
@@ -44,8 +46,8 @@ class TwilioService:
         return message.strip()
     
     def send_whatsapp_message(self, to_number: str, message: str, 
-                            media_url: str = None) -> Dict:
-        """Enviar mensaje de WhatsApp"""
+                            media_urls: List[str] = None) -> Dict:
+        """Enviar mensaje de WhatsApp con soporte para múltiples archivos"""
         if not self.is_configured():
             return {
                 'success': False,
@@ -68,8 +70,15 @@ class TwilioService:
             }
             
             # Agregar media si existe
-            if media_url:
-                message_params['media_url'] = [media_url]
+            if media_urls:
+                # Twilio soporta hasta 10 archivos multimedia por mensaje
+                # Filtrar solo URLs válidas (no None)
+                valid_urls = [url for url in media_urls if url][:10]
+                if valid_urls:
+                    message_params['media_url'] = valid_urls
+                    logger.info(f"Adjuntando {len(valid_urls)} archivo(s) al mensaje")
+                    for i, url in enumerate(valid_urls):
+                        logger.debug(f"  Archivo {i+1}: {url}")
             
             # Enviar mensaje
             message = self.client.messages.create(**message_params)
@@ -81,7 +90,8 @@ class TwilioService:
                 'sid': message.sid,
                 'status': message.status,
                 'to': message.to,
-                'from': message.from_
+                'from': message.from_,
+                'media_count': len(valid_urls) if media_urls else 0
             }
             
         except TwilioRestException as e:
@@ -174,6 +184,37 @@ class TwilioService:
         except Exception as e:
             logger.error(f"Error probando conexión con Twilio: {e}")
             return False
+    
+    def validate_media_url(self, url: str) -> Dict:
+        """Validar URL de archivo multimedia"""
+        if not url:
+            return {'valid': False, 'error': 'URL vacía'}
+        
+        # Verificar que sea una URL válida
+        url_pattern = re.compile(
+            r'^https?://'  # http:// o https://
+            r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # dominio
+            r'localhost|'  # localhost
+            r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # IP
+            r'(?::\d+)?'  # puerto opcional
+            r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+        
+        if not url_pattern.match(url):
+            return {'valid': False, 'error': 'URL no válida'}
+        
+        # Verificar extensión permitida
+        allowed_extensions = [
+            'jpg', 'jpeg', 'png', 'gif', 'webp',  # Imágenes
+            'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',  # Documentos
+            'mp3', 'aac', 'ogg', 'opus', 'amr',  # Audio
+            'mp4', 'avi', 'mov', 'wmv', 'flv'  # Video
+        ]
+        
+        ext = url.split('.')[-1].lower().split('?')[0]  # Manejar URLs con parámetros
+        if ext not in allowed_extensions:
+            return {'valid': False, 'error': f'Extensión no permitida: .{ext}'}
+        
+        return {'valid': True, 'url': url}
 
 
 class RateLimiter:
@@ -197,7 +238,7 @@ class RateLimiter:
 
 
 class MessageQueue:
-    """Cola de mensajes para envío masivo"""
+    """Cola de mensajes para envío masivo con soporte de archivos"""
     
     def __init__(self, twilio_service: TwilioService):
         self.twilio_service = twilio_service
@@ -205,12 +246,12 @@ class MessageQueue:
         self.processing = False
     
     def add_message(self, to_number: str, message: str, 
-                    media_url: str = None, callback=None):
-        """Agregar mensaje a la cola"""
+                    media_urls: List[str] = None, callback=None):
+        """Agregar mensaje a la cola con archivos multimedia opcionales"""
         self.queue.append({
             'to_number': to_number,
             'message': message,
-            'media_url': media_url,
+            'media_urls': media_urls,
             'callback': callback,
             'attempts': 0
         })
@@ -222,11 +263,11 @@ class MessageQueue:
         while self.queue and self.processing:
             item = self.queue.pop(0)
             
-            # Enviar mensaje
+            # Enviar mensaje con archivos multimedia si existen
             result = self.twilio_service.send_whatsapp_message(
                 item['to_number'],
                 item['message'],
-                item['media_url']
+                item.get('media_urls')
             )
             
             # Ejecutar callback si existe

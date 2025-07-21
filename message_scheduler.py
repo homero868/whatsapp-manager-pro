@@ -1,10 +1,12 @@
+# Actualización de message_scheduler.py para soportar archivos adjuntos
+
 import schedule
 import threading
 import time
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, Callable, List
-from database import CampaignModel, MessageModel, ContactModel
+from database import CampaignModel, MessageModel, ContactModel, AttachmentModel
 from twilio_service import TwilioService, MessageQueue
 from config import Config
 import json
@@ -16,6 +18,7 @@ class MessageScheduler:
         self.campaign_model = CampaignModel()
         self.message_model = MessageModel()
         self.contact_model = ContactModel()
+        self.attachment_model = AttachmentModel()
         self.twilio_service = TwilioService()
         self.message_queue = MessageQueue(self.twilio_service)
         self.running = False
@@ -25,12 +28,18 @@ class MessageScheduler:
     def start(self):
         """Iniciar el programador"""
         if self.running:
+            logger.warning("El scheduler ya está en ejecución")
             return
         
         self.running = True
         self.thread = threading.Thread(target=self._run_scheduler, daemon=True)
         self.thread.start()
         logger.info("Programador de mensajes iniciado")
+        logger.info("Configuración del scheduler:")
+        logger.info("  - Verificar campañas: cada 1 minuto")
+        logger.info("  - Procesar mensajes: cada 5 segundos")
+        logger.info("  - Reintentar fallidos: cada 5 minutos")
+        logger.info("  - Actualizar estados: cada 1 hora")
     
     def stop(self):
         """Detener el programador"""
@@ -42,23 +51,68 @@ class MessageScheduler:
     
     def _run_scheduler(self):
         """Loop principal del programador"""
-        # Programar tareas
-        schedule.every(1).minutes.do(self._check_pending_campaigns)
-        schedule.every(30).seconds.do(self._process_pending_messages)
-        schedule.every(5).minutes.do(self._retry_failed_messages)
-        schedule.every(1).hours.do(self._update_message_statuses)
-        
-        while self.running:
-            schedule.run_pending()
-            time.sleep(1)
+        try:
+            # Programar tareas
+            schedule.every(10).seconds.do(self._check_pending_campaigns)  # Temporalmente cada 10 segundos para pruebas
+            schedule.every(5).seconds.do(self._process_pending_messages)
+            schedule.every(5).minutes.do(self._retry_failed_messages)
+            schedule.every(1).hours.do(self._update_message_statuses)
+            
+            logger.info("✅ Scheduler configurado correctamente")
+            logger.info("📅 Tareas programadas:")
+            for job in schedule.jobs:
+                logger.info(f"  - {job}")
+            
+            # Ejecutar verificación inicial de campañas
+            logger.info("Ejecutando verificación inicial de campañas...")
+            self._check_pending_campaigns()
+            
+            while self.running:
+                schedule.run_pending()
+                time.sleep(1)
+                
+        except Exception as e:
+            logger.error(f"Error fatal en scheduler: {e}", exc_info=True)
+            self.running = False
     
     def _check_pending_campaigns(self):
         """Verificar y ejecutar campañas pendientes"""
         try:
+            logger.info("=" * 50)
+            logger.info("🔍 Verificando campañas programadas...")
+            logger.info(f"Hora actual: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            # Primero, veamos TODAS las campañas para debug
+            from database import DatabaseManager
+            db = DatabaseManager()
+            all_campaigns = db.execute_query(
+                "SELECT id, name, status, scheduled_at FROM campaigns WHERE status = 'pending' ORDER BY scheduled_at ASC"
+            )
+            
+            if all_campaigns:
+                logger.debug("Campañas pendientes en BD:")
+                for c in all_campaigns:
+                    scheduled_time = c['scheduled_at']
+                    time_diff = (scheduled_time - datetime.now()).total_seconds()
+                    if time_diff > 0:
+                        minutes_left = int(time_diff / 60)
+                        seconds_left = int(time_diff % 60)
+                        logger.info(f"  📅 '{c['name']}' se ejecutará en {minutes_left}m {seconds_left}s (a las {scheduled_time.strftime('%H:%M:%S')})")
+                    else:
+                        logger.info(f"  ✅ '{c['name']}' lista para ejecutar (programada para {scheduled_time.strftime('%H:%M:%S')})")
+            
+            # Ahora buscar las pendientes que ya deben ejecutarse
             campaigns = self.campaign_model.get_pending_campaigns()
             
+            if campaigns:
+                logger.info(f"🚀 Campañas listas para ejecutar: {len(campaigns)}")
+                for c in campaigns:
+                    logger.info(f"  - {c['name']} programada para {c.get('scheduled_at')}")
+            else:
+                logger.info("⏳ No hay campañas listas para ejecutar en este momento")
+            
             for campaign in campaigns:
-                logger.info(f"Iniciando campaña: {campaign['name']} (ID: {campaign['id']})")
+                logger.info(f"🚀 Iniciando campaña: {campaign['name']} (ID: {campaign['id']})")
                 
                 # Actualizar estado a 'running'
                 self.campaign_model.update_campaign_status(campaign['id'], 'running')
@@ -66,30 +120,44 @@ class MessageScheduler:
                 # Obtener contactos
                 contacts = self.contact_model.get_contacts()
                 contact_ids = [c['id'] for c in contacts]
+                logger.info(f"Contactos encontrados: {len(contact_ids)}")
                 
                 # Crear mensajes para la campaña
                 if contact_ids:
-                    self.message_model.create_messages(
+                    created = self.message_model.create_messages(
                         campaign['id'],
                         campaign['template_id'],
                         contact_ids
                     )
-                    logger.info(f"Creados {len(contact_ids)} mensajes para campaña {campaign['id']}")
+                    logger.info(f"✅ Creados {len(contact_ids)} mensajes para campaña {campaign['id']}")
+                else:
+                    logger.warning("⚠️ No hay contactos para enviar")
                 
                 # Ejecutar callback si existe
                 if campaign['id'] in self.callbacks:
                     self.callbacks[campaign['id']]('started', campaign)
+                    
+            logger.info("=" * 50)
         
         except Exception as e:
-            logger.error(f"Error procesando campañas pendientes: {e}")
+            logger.error(f"❌ Error procesando campañas pendientes: {e}", exc_info=True)
     
     def _process_pending_messages(self):
-        """Procesar mensajes pendientes de envío"""
+        """Procesar mensajes pendientes de envío con archivos adjuntos"""
         try:
+            logger.info("Iniciando procesamiento de mensajes pendientes...")
+            
             # Obtener mensajes pendientes
             messages = self.message_model.get_pending_messages(limit=10)
+            logger.info(f"Mensajes pendientes encontrados: {len(messages)}")
             
+            if not messages:
+                return
+                
             for message in messages:
+                logger.info(f"Procesando mensaje ID: {message['id']} para {message['phone_number']}")
+                logger.debug(f"Datos del mensaje: {message}")
+                
                 # Formatear mensaje con datos del contacto
                 contact_data = {
                     'nombre': message.get('name', ''),
@@ -112,24 +180,81 @@ class MessageScheduler:
                     contact_data
                 )
                 
-                # Agregar a la cola
-                self.message_queue.add_message(
-                    message['phone_number'],
-                    formatted_message,
-                    callback=lambda result, msg_id=message['id']: 
-                        self._handle_send_result(msg_id, result)
-                )
+                logger.info(f"Mensaje formateado: {formatted_message[:100]}...")
+                
+                # Obtener archivos adjuntos de la plantilla
+                media_urls = []
+                try:
+                    attachments = self.attachment_model.get_template_attachments(
+                        message['template_id']
+                    )
+                    
+                    # WhatsApp permite hasta 10 archivos por mensaje
+                    for attachment in attachments[:10]:
+                        # Usar URL pública si está disponible
+                        if attachment.get('public_url'):
+                            media_urls.append(attachment['public_url'])
+                            logger.info(f"Agregando archivo a enviar: {attachment['file_name']}")
+                        else:
+                            # Log de advertencia si no hay URL pública
+                            logger.warning(
+                                f"Archivo adjunto sin URL pública: {attachment['file_name']}. "
+                                "Necesita configurar un servicio de hosting de archivos."
+                            )
+                    
+                    if len(media_urls) > 0:
+                        logger.info(f"Total de archivos a enviar: {len(media_urls)}")
+                    
+                except Exception as e:
+                    logger.error(f"Error obteniendo archivos adjuntos: {e}")
+                
+                # Estrategia para múltiples archivos
+                if len(media_urls) > 1:
+                    logger.info(f"Dividiendo en múltiples mensajes debido a limitación de WhatsApp")
+                    
+                    # Primer mensaje con texto y primer archivo
+                    self.message_queue.add_message(
+                        message['phone_number'],
+                        formatted_message,
+                        media_urls=[media_urls[0]] if media_urls else None,
+                        callback=lambda result, msg_id=message['id']: 
+                            self._handle_send_result(msg_id, result)
+                    )
+                    
+                    # Mensajes adicionales para el resto de archivos
+                    for i, media_url in enumerate(media_urls[1:], 2):
+                        additional_text = f"📎 Archivo {i} de {len(media_urls)}"
+                        self.message_queue.add_message(
+                            message['phone_number'],
+                            additional_text,
+                            media_urls=[media_url],
+                            callback=lambda result, msg_id=message['id'], idx=i: 
+                                logger.info(f"Archivo {idx} enviado para mensaje {msg_id}")
+                        )
+                else:
+                    # Un solo archivo o ninguno
+                    self.message_queue.add_message(
+                        message['phone_number'],
+                        formatted_message,
+                        media_urls=media_urls if media_urls else None,
+                        callback=lambda result, msg_id=message['id']: 
+                            self._handle_send_result(msg_id, result)
+                    )
             
             # Procesar cola
-            if self.message_queue.get_queue_size() > 0:
+            queue_size = self.message_queue.get_queue_size()
+            if queue_size > 0:
+                logger.info(f"Procesando cola con {queue_size} mensajes...")
                 queue_thread = threading.Thread(
                     target=self.message_queue.process_queue,
                     daemon=True
                 )
                 queue_thread.start()
+            else:
+                logger.warning("La cola de mensajes está vacía")
         
         except Exception as e:
-            logger.error(f"Error procesando mensajes pendientes: {e}")
+            logger.error(f"Error procesando mensajes pendientes: {e}", exc_info=True)
     
     def _retry_failed_messages(self):
         """Reintentar mensajes fallidos"""
@@ -203,7 +328,10 @@ class MessageScheduler:
                     'sent',
                     twilio_sid=result.get('sid')
                 )
-                logger.info(f"Mensaje {message_id} enviado exitosamente")
+                logger.info(
+                    f"Mensaje {message_id} enviado exitosamente"
+                    f"{' con ' + str(result.get('media_count', 0)) + ' archivo(s)' if result.get('media_count') else ''}"
+                )
             else:
                 self.message_model.update_message_status(
                     message_id,

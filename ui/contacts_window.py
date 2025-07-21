@@ -3,8 +3,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QMessageBox, QFileDialog, QDialog, QLabel,
                              QLineEdit, QComboBox, QTextEdit, QGroupBox,
                              QSpinBox, QCheckBox, QProgressDialog)
-from PyQt6.QtCore import Qt, pyqtSignal, QThread
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QEvent
+from PyQt6.QtGui import QColor, QPainter
 import pandas as pd
 from typing import List, Dict
 import json
@@ -15,6 +15,55 @@ from auth import auth_manager
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class CustomHeaderView(QHeaderView):
+    """Header personalizado que evita ordenamiento en columnas específicas"""
+    
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self.non_sortable_columns = set()
+    
+    def set_non_sortable_column(self, logical_index):
+        """Marcar una columna como no ordenable"""
+        self.non_sortable_columns.add(logical_index)
+    
+    def paintSection(self, painter, rect, logicalIndex):
+        """Pintar sección del header - ocultar indicador en columnas no ordenables"""
+        if logicalIndex in self.non_sortable_columns:
+            # Guardar el indicador actual
+            current_indicator = self.sortIndicatorSection()
+            
+            # Temporalmente cambiar el indicador si está en esta columna
+            if current_indicator == logicalIndex:
+                self.setSortIndicator(-1, self.sortIndicatorOrder())
+            
+            # Pintar la sección
+            super().paintSection(painter, rect, logicalIndex)
+            
+            # Restaurar el indicador
+            if current_indicator == logicalIndex:
+                self.setSortIndicator(current_indicator, self.sortIndicatorOrder())
+        else:
+            super().paintSection(painter, rect, logicalIndex)
+    
+    def mousePressEvent(self, event):
+        """Interceptar clics del mouse"""
+        logical_index = self.logicalIndexAt(event.pos())
+        if logical_index in self.non_sortable_columns:
+            # Ignorar el clic en columnas no ordenables
+            event.ignore()
+            return
+        super().mousePressEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        """Interceptar liberación del mouse"""
+        logical_index = self.logicalIndexAt(event.pos())
+        if logical_index in self.non_sortable_columns:
+            # Ignorar el evento en columnas no ordenables
+            event.ignore()
+            return
+        super().mouseReleaseEvent(event)
 
 class ContactsWindow(QWidget):
     contacts_updated = pyqtSignal()
@@ -99,20 +148,33 @@ class ContactsWindow(QWidget):
             "Seleccionar", "Teléfono", "Nombre", "Email", "Empresa", "Fecha Registro"
         ])
         
+        # Reemplazar el header con uno personalizado
+        custom_header = CustomHeaderView(Qt.Orientation.Horizontal, self.contacts_table)
+        custom_header.set_non_sortable_column(0)  # Columna "Seleccionar" no ordenable
+        self.contacts_table.setHorizontalHeader(custom_header)
+        
         # Configurar tabla
         header = self.contacts_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.contacts_table.setColumnWidth(0, 100)
         
-        # Configurar anchos de columna proporcionales
+        # IMPORTANTE: Configurar modo de redimensionamiento ANTES de establecer anchos
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         
-        self.contacts_table.setColumnWidth(1, 150)  # Teléfono
-        self.contacts_table.setColumnWidth(5, 150)  # Fecha
+        # Establecer anchos de columna DESPUÉS del modo de redimensionamiento
+        self.contacts_table.setColumnWidth(0, 120)   # Seleccionar (aumentado de 100 a 120)
+        self.contacts_table.setColumnWidth(1, 150)   # Teléfono
+        # Columnas 2, 3, 4 se ajustan automáticamente con Stretch
+        self.contacts_table.setColumnWidth(5, 150)   # Fecha
+        
+        # Configurar header para evitar movimientos al ordenar
+        header.setHighlightSections(False)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setStretchLastSection(True)
         
         # Configurar altura de filas
         self.contacts_table.verticalHeader().setDefaultSectionSize(40)
@@ -126,19 +188,58 @@ class ContactsWindow(QWidget):
             QTableWidget {
                 gridline-color: #ddd;
                 font-size: 13px;
+                selection-background-color: #e3f2fd;
             }
             QTableWidget::item {
                 padding: 8px;
+                border: none;
+            }
+            QTableWidget::item:selected {
+                background-color: #e3f2fd;
+                color: black;
             }
             QHeaderView::section {
+                background-color: #f8f9fa;
                 padding: 10px;
+                padding-right: 25px; /* Espacio extra para el indicador */
                 font-weight: bold;
+                border: none;
+                border-right: 1px solid #ddd;
+                border-bottom: 1px solid #ddd;
+            }
+            QHeaderView::section:hover {
+                background-color: #e9ecef;
+            }
+            QTableWidget QTableCornerButton::section {
+                background-color: #f8f9fa;
+                border: none;
+                border-right: 1px solid #ddd;
+                border-bottom: 1px solid #ddd;
+            }
+            QHeaderView::down-arrow {
+                subcontrol-position: right center;
+                subcontrol-origin: padding;
+                right: 5px;
+                width: 10px;
+                height: 10px;
+            }
+            QHeaderView::up-arrow {
+                subcontrol-position: right center;
+                subcontrol-origin: padding;
+                right: 5px;
+                width: 10px;
+                height: 10px;
             }
         """)
         
         self.contacts_table.setAlternatingRowColors(True)
         self.contacts_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.contacts_table.setSortingEnabled(True)
+        
+        # IMPORTANTE: Deshabilitar el ordenamiento hasta que los datos estén cargados
+        self.contacts_table.setSortingEnabled(False)
+        
+        # Establecer ordenamiento inicial en una columna que no sea la de checkbox
+        self.contacts_table.sortByColumn(1, Qt.SortOrder.AscendingOrder)  # Ordenar por Teléfono inicialmente
         
         layout.addWidget(self.contacts_table)
         
@@ -152,27 +253,40 @@ class ContactsWindow(QWidget):
     def load_contacts(self):
         """Cargar contactos en la tabla"""
         try:
+            # Deshabilitar ordenamiento temporalmente
+            self.contacts_table.setSortingEnabled(False)
+            
             contacts = self.contact_model.get_contacts()
             self.populate_table(contacts)
             self.update_info()
+            
+            # Habilitar ordenamiento después de cargar datos
+            self.contacts_table.setSortingEnabled(True)
+            
+            # Establecer ordenamiento inicial si no hay uno definido
+            if self.contacts_table.horizontalHeader().sortIndicatorSection() == -1:
+                self.contacts_table.sortByColumn(5, Qt.SortOrder.DescendingOrder)  # Ordenar por fecha descendente
+            
         except Exception as e:
             logger.error(f"Error cargando contactos: {e}")
             QMessageBox.critical(self, "Error", f"Error cargando contactos: {str(e)}")
     
     def populate_table(self, contacts: List[Dict]):
         """Poblar tabla con contactos"""
+        # Guardar estado de ordenamiento actual
+        current_sort_column = self.contacts_table.horizontalHeader().sortIndicatorSection()
+        current_sort_order = self.contacts_table.horizontalHeader().sortIndicatorOrder()
+        
         self.contacts_table.setRowCount(len(contacts))
         
         for row, contact in enumerate(contacts):
-            # Checkbox centrado
-            checkbox_widget = QWidget()
-            checkbox_layout = QHBoxLayout(checkbox_widget)
-            checkbox = QCheckBox()
-            checkbox.setProperty("contact_id", contact['id'])
-            checkbox_layout.addWidget(checkbox)
-            checkbox_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            checkbox_layout.setContentsMargins(0, 0, 0, 0)
-            self.contacts_table.setCellWidget(row, 0, checkbox_widget)
+            # Checkbox - Usar QTableWidgetItem con CheckState en lugar de QWidget
+            checkbox_item = QTableWidgetItem()
+            checkbox_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            checkbox_item.setCheckState(Qt.CheckState.Unchecked)
+            checkbox_item.setData(Qt.ItemDataRole.UserRole, contact['id'])
+            checkbox_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.contacts_table.setItem(row, 0, checkbox_item)
             
             # Datos
             self.contacts_table.setItem(row, 1, QTableWidgetItem(contact.get('phone_number', '')))
@@ -191,7 +305,22 @@ class ContactsWindow(QWidget):
             for col in range(1, 6):
                 item = self.contacts_table.item(row, col)
                 if item:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        
+        # Restaurar estado de ordenamiento
+        if current_sort_column >= 0:
+            self.contacts_table.sortItems(current_sort_column, current_sort_order)
+    
+    def get_selected_contact_ids(self):
+        """Obtener IDs de contactos seleccionados"""
+        selected_ids = []
+        
+        for row in range(self.contacts_table.rowCount()):
+            checkbox_item = self.contacts_table.item(row, 0)
+            if checkbox_item and checkbox_item.checkState() == Qt.CheckState.Checked:
+                selected_ids.append(checkbox_item.data(Qt.ItemDataRole.UserRole))
+        
+        return selected_ids
     
     def import_contacts(self):
         """Importar contactos desde Excel"""
@@ -309,14 +438,7 @@ class ContactsWindow(QWidget):
     
     def delete_selected(self):
         """Eliminar contactos seleccionados"""
-        selected_ids = []
-        
-        for row in range(self.contacts_table.rowCount()):
-            checkbox_widget = self.contacts_table.cellWidget(row, 0)
-            if checkbox_widget:
-                checkbox = checkbox_widget.findChild(QCheckBox)
-                if checkbox and checkbox.isChecked():
-                    selected_ids.append(checkbox.property("contact_id"))
+        selected_ids = self.get_selected_contact_ids()
         
         if not selected_ids:
             QMessageBox.warning(self, "Aviso", "No hay contactos seleccionados")
@@ -499,27 +621,6 @@ class ImportDialog(QDialog):
                 # Luego agregar todas las columnas disponibles
                 for idx, col in enumerate(self.columns):
                     combo.addItem(col, idx)
-            
-            # Obtener estadísticas de columnas
-            stats = self.excel_handler.get_column_statistics(self.df)
-            
-            # Auto-detectar columna de teléfono
-            for stat in stats:
-                if stat['potential_phone_column']:
-                    self.phone_combo.setCurrentIndex(stat['column_index'])
-                    break
-            
-            # Actualizar información
-            self.file_label.setText(
-                f"Archivo: {self.file_path} - "
-                f"{len(self.df)} filas, {len(self.columns)} columnas"
-            )
-            
-            self.preview_data()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error cargando archivo: {str(e)}")
-            self.reject()(self.columns)
             
             # Obtener estadísticas de columnas
             stats = self.excel_handler.get_column_statistics(self.df)

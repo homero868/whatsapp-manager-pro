@@ -201,7 +201,7 @@ class CampaignModel:
         self.db = DatabaseManager()
     
     def create_campaign(self, name: str, template_id: int, scheduled_at: str, 
-                       user_id: int, total_contacts: int) -> int:
+                        user_id: int, total_contacts: int) -> int:
         """Crear nueva campaña"""
         query = """
             INSERT INTO campaigns (name, template_id, scheduled_at, created_by, total_contacts)
@@ -273,7 +273,7 @@ class MessageModel:
         """Obtener mensajes pendientes de envío"""
         query = """
             SELECT m.*, c.phone_number, c.name, c.email, c.extra_data,
-                   t.content as template_content, t.variables
+                    t.content as template_content, t.variables
             FROM messages m
             JOIN contacts c ON m.contact_id = c.id
             JOIN templates t ON m.template_id = t.id
@@ -371,3 +371,72 @@ class ActivityLogModel:
         params.append(limit)
         
         return self.db.execute_query(query, params)
+
+class AttachmentModel:
+    def __init__(self):
+        self.db = DatabaseManager()
+    
+    def create_attachment(self, template_id: int, file_name: str, file_path: str, 
+                            file_type: str, file_size: int, mime_type: str = None, 
+                            public_url: str = None) -> int:
+        """Crear nuevo adjunto"""
+        query = """
+            INSERT INTO attachments (template_id, file_name, file_path, file_type, 
+                                    file_size, mime_type, public_url)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        return self.db.execute_insert(
+            query, 
+            (template_id, file_name, file_path, file_type, file_size, mime_type, public_url)
+        )
+    
+    def get_template_attachments(self, template_id: int) -> List[Dict]:
+        """Obtener adjuntos de una plantilla"""
+        query = """
+            SELECT * FROM attachments 
+            WHERE template_id = %s 
+            ORDER BY created_at ASC
+        """
+        return self.db.execute_query(query, (template_id,))
+    
+    def delete_attachment(self, attachment_id: int) -> bool:
+        """Eliminar adjunto"""
+        # Primero obtener info del archivo para borrarlo físicamente
+        query = "SELECT file_path FROM attachments WHERE id = %s"
+        result = self.db.execute_query(query, (attachment_id,), fetch_one=True)
+        
+        if result:
+            import os
+            try:
+                # Eliminar archivo físico
+                if os.path.exists(result['file_path']):
+                    os.remove(result['file_path'])
+            except Exception as e:
+                logger.error(f"Error eliminando archivo físico: {e}")
+        
+        # Eliminar de la base de datos
+        query = "DELETE FROM attachments WHERE id = %s"
+        return self.db.execute_update(query, (attachment_id,)) > 0
+    
+    def delete_template_attachments(self, template_id: int) -> int:
+        """Eliminar todos los adjuntos de una plantilla"""
+        # Obtener todos los adjuntos primero
+        attachments = self.get_template_attachments(template_id)
+        
+        # Eliminar archivos físicos
+        import os
+        for attachment in attachments:
+            try:
+                if os.path.exists(attachment['file_path']):
+                    os.remove(attachment['file_path'])
+            except Exception as e:
+                logger.error(f"Error eliminando archivo físico: {e}")
+        
+        # Eliminar de la base de datos
+        query = "DELETE FROM attachments WHERE template_id = %s"
+        return self.db.execute_update(query, (template_id,))
+    
+    def update_attachment_url(self, attachment_id: int, public_url: str) -> bool:
+        """Actualizar URL pública del adjunto"""
+        query = "UPDATE attachments SET public_url = %s WHERE id = %s"
+        return self.db.execute_update(query, (public_url, attachment_id)) > 0

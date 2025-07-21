@@ -1,15 +1,20 @@
+# Actualización completa de ui/templates_window.py con soporte para archivos adjuntos
+
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QListWidget, QTextEdit, QLabel, QLineEdit,
                              QMessageBox, QDialog, QGroupBox, QListWidgetItem,
-                             QSplitter, QFileDialog, QComboBox)
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+                             QSplitter, QFileDialog, QComboBox, QTableWidget,
+                             QTableWidgetItem, QHeaderView, QProgressDialog)
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSlot
+from PyQt6.QtGui import QFont, QIcon, QPixmap
 import json
 import re
+import os
 from typing import Dict, List, Optional
 
-from database import TemplateModel, ContactModel
+from database import TemplateModel, ContactModel, AttachmentModel
 from twilio_service import TwilioService
+from file_uploader import FileUploader
 from auth import auth_manager
 from config import Config
 import logging
@@ -23,7 +28,9 @@ class TemplatesWindow(QWidget):
         super().__init__()
         self.template_model = TemplateModel()
         self.contact_model = ContactModel()
+        self.attachment_model = AttachmentModel()
         self.twilio_service = TwilioService()
+        self.file_uploader = FileUploader()
         self.activity_logger = None
         self.current_template_id = None
         self.init_ui()
@@ -142,6 +149,42 @@ class TemplatesWindow(QWidget):
         content_group.setLayout(content_layout)
         right_layout.addWidget(content_group)
         
+        # Archivos adjuntos
+        attachments_group = QGroupBox("Archivos Adjuntos")
+        attachments_layout = QVBoxLayout()
+        
+        # Tabla de archivos adjuntos
+        self.attachments_table = QTableWidget()
+        self.attachments_table.setColumnCount(5)
+        self.attachments_table.setHorizontalHeaderLabels([
+            "Archivo", "Tipo", "Tamaño", "Vista Previa", "Acciones"
+        ])
+        
+        header = self.attachments_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        
+        self.attachments_table.setColumnWidth(1, 80)
+        self.attachments_table.setColumnWidth(2, 80)
+        self.attachments_table.setColumnWidth(3, 100)
+        self.attachments_table.setColumnWidth(4, 100)
+        
+        self.attachments_table.setMaximumHeight(150)
+        self.attachments_table.setAlternatingRowColors(True)
+        
+        attachments_layout.addWidget(self.attachments_table)
+        
+        # Información de archivos
+        self.attachments_info = QLabel("Sin archivos adjuntos")
+        self.attachments_info.setStyleSheet("color: #666; padding: 5px;")
+        attachments_layout.addWidget(self.attachments_info)
+        
+        attachments_group.setLayout(attachments_layout)
+        right_layout.addWidget(attachments_group)
+        
         # Vista previa
         preview_group = QGroupBox("Vista Previa")
         preview_layout = QVBoxLayout()
@@ -226,7 +269,74 @@ class TemplatesWindow(QWidget):
             self.current_template_id = template['id']
             self.name_input.setText(template['name'])
             self.content_editor.setText(template['content'])
+            self.load_attachments()
             self.update_preview()
+    
+    def load_attachments(self):
+        """Cargar archivos adjuntos de la plantilla actual"""
+        if not self.current_template_id:
+            self.attachments_table.setRowCount(0)
+            self.attachments_info.setText("Sin archivos adjuntos")
+            return
+        
+        try:
+            attachments = self.attachment_model.get_template_attachments(self.current_template_id)
+            
+            # Limitar a 10 archivos según límite de WhatsApp
+            if len(attachments) > 10:
+                attachments = attachments[:10]
+                logger.warning(f"La plantilla tiene más de 10 archivos. Solo se mostrarán los primeros 10.")
+            
+            self.attachments_table.setRowCount(len(attachments))
+            
+            total_size = 0
+            
+            for row, attachment in enumerate(attachments):
+                # Nombre del archivo
+                self.attachments_table.setItem(row, 0, QTableWidgetItem(attachment['file_name']))
+                
+                # Tipo
+                self.attachments_table.setItem(row, 1, QTableWidgetItem(attachment['file_type']))
+                
+                # Tamaño
+                size_mb = attachment['file_size'] / (1024 * 1024)
+                self.attachments_table.setItem(row, 2, QTableWidgetItem(f"{size_mb:.2f} MB"))
+                total_size += attachment['file_size']
+                
+                # Vista previa
+                preview_btn = QPushButton("👁️ Ver")
+                preview_btn.clicked.connect(lambda checked, path=attachment['file_path']: self.preview_file(path))
+                self.attachments_table.setCellWidget(row, 3, preview_btn)
+                
+                # Acciones
+                delete_btn = QPushButton("🗑️ Eliminar")
+                delete_btn.clicked.connect(lambda checked, att_id=attachment['id']: self.delete_attachment(att_id))
+                delete_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #dc3545;
+                        color: white;
+                        border: none;
+                        padding: 4px 8px;
+                        border-radius: 3px;
+                        font-size: 12px;
+                    }
+                    QPushButton:hover {
+                        background-color: #c82333;
+                    }
+                """)
+                self.attachments_table.setCellWidget(row, 4, delete_btn)
+            
+            # Actualizar información con límite de WhatsApp
+            total_size_mb = total_size / (1024 * 1024)
+            info_text = f"{len(attachments)} archivo(s) - Tamaño total: {total_size_mb:.2f} MB"
+            
+            if len(attachments) >= 10:
+                info_text += " (Límite máximo de WhatsApp: 10 archivos)"
+            
+            self.attachments_info.setText(info_text)
+            
+        except Exception as e:
+            logger.error(f"Error cargando archivos adjuntos: {e}")
     
     def new_template(self):
         """Crear nueva plantilla"""
@@ -234,6 +344,8 @@ class TemplatesWindow(QWidget):
         self.name_input.clear()
         self.content_editor.clear()
         self.preview_text.clear()
+        self.attachments_table.setRowCount(0)
+        self.attachments_info.setText("Sin archivos adjuntos")
         self.name_input.setFocus()
     
     def save_template(self):
@@ -302,12 +414,17 @@ class TemplatesWindow(QWidget):
         reply = QMessageBox.question(
             self,
             "Confirmar Eliminación",
-            f"¿Está seguro de eliminar la plantilla '{template['name']}'?",
+            f"¿Está seguro de eliminar la plantilla '{template['name']}'?\n"
+            "También se eliminarán todos los archivos adjuntos.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
         if reply == QMessageBox.StandardButton.Yes:
             try:
+                # Eliminar archivos adjuntos
+                self.attachment_model.delete_template_attachments(template['id'])
+                
+                # Eliminar plantilla
                 if self.template_model.delete_template(template['id']):
                     QMessageBox.information(self, "Éxito", "Plantilla eliminada")
                     self.load_templates()
@@ -335,11 +452,193 @@ class TemplatesWindow(QWidget):
     
     def attach_file(self):
         """Adjuntar archivo a la plantilla"""
-        QMessageBox.information(
+        if not self.current_template_id:
+            # Si no hay plantilla actual, guardar primero
+            reply = QMessageBox.question(
+                self,
+                "Guardar Plantilla",
+                "Debe guardar la plantilla antes de adjuntar archivos.\n"
+                "¿Desea guardar ahora?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.save_template()
+                if not self.current_template_id:
+                    return
+            else:
+                return
+        
+        # Verificar límite de archivos de WhatsApp
+        current_attachments = self.attachment_model.get_template_attachments(self.current_template_id)
+        if len(current_attachments) >= 10:
+            QMessageBox.warning(
+                self,
+                "Límite de archivos alcanzado",
+                "WhatsApp permite un máximo de 10 archivos por mensaje.\n"
+                "Debe eliminar algún archivo antes de agregar uno nuevo."
+            )
+            return
+        
+        # Seleccionar archivo
+        file_dialog = QFileDialog()
+        file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        
+        # Crear filtro de archivos según tipos permitidos por WhatsApp
+        filter_groups = {
+            "Imágenes (WhatsApp)": ["jpg", "jpeg", "png"],
+            "Documentos": ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt"],
+            "Audio": ["mp3", "aac", "ogg", "opus", "amr"],
+            "Video": ["mp4", "3gp"]
+        }
+        
+        filters = []
+        for group, exts in filter_groups.items():
+            filter_str = f"{group} ({' '.join('*.' + ext for ext in exts)})"
+            filters.append(filter_str)
+        
+        # Agregar filtro para todos los archivos permitidos
+        all_extensions = []
+        for exts in filter_groups.values():
+            all_extensions.extend(exts)
+        filters.insert(0, "Todos los archivos permitidos (*." + " *.".join(all_extensions) + ")")
+        
+        file_path, _ = file_dialog.getOpenFileName(
             self,
-            "Función en Desarrollo",
-            "La función de adjuntar archivos estará disponible próximamente."
+            "Seleccionar archivo",
+            "",
+            ";;".join(filters)
         )
+        
+        if not file_path:
+            return
+        
+        # Procesar archivo
+        self.process_file_attachment(file_path)
+    
+    def process_file_attachment(self, file_path: str):
+        """Procesar archivo adjunto"""
+        try:
+            # Mostrar diálogo de progreso
+            progress = QProgressDialog("Procesando archivo...", "Cancelar", 0, 100, self)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.show()
+            progress.setValue(20)
+            
+            # Obtener nombre original
+            original_name = os.path.basename(file_path)
+            
+            # Guardar archivo
+            success, message, file_info = self.file_uploader.save_file(
+                file_path, original_name, self.current_template_id
+            )
+            
+            progress.setValue(60)
+            
+            if not success:
+                progress.close()
+                QMessageBox.critical(self, "Error", message)
+                return
+            
+            # Guardar en base de datos
+            attachment_id = self.attachment_model.create_attachment(
+                template_id=self.current_template_id,
+                file_name=file_info['file_name'],
+                file_path=file_info['file_path'],
+                file_type=file_info['file_type'],
+                file_size=file_info['file_size'],
+                mime_type=file_info['mime_type']
+            )
+            
+            progress.setValue(80)
+            
+            if attachment_id:
+                # Obtener URL pública usando el servidor local
+                public_url = self.file_uploader.get_file_url(file_info['file_path'])
+                if public_url:
+                    self.attachment_model.update_attachment_url(attachment_id, public_url)
+                    logger.info(f"URL pública generada: {public_url}")
+                else:
+                    logger.warning("No se pudo generar URL pública para el archivo")
+                
+                progress.setValue(100)
+                progress.close()
+                
+                QMessageBox.information(
+                    self,
+                    "Éxito",
+                    f"Archivo '{original_name}' adjuntado exitosamente.\n"
+                    f"Total de archivos: {len(self.attachment_model.get_template_attachments(self.current_template_id))}"
+                )
+                
+                # Recargar archivos adjuntos
+                self.load_attachments()
+                
+                if self.activity_logger:
+                    self.activity_logger.log(
+                        'ATTACHMENT_ADD',
+                        f"Archivo adjuntado a plantilla: {original_name}"
+                    )
+            else:
+                progress.close()
+                # Si falla, eliminar archivo físico
+                self.file_uploader.delete_file(file_info['file_path'])
+                QMessageBox.critical(self, "Error", "Error guardando información del archivo")
+                
+        except Exception as e:
+            logger.error(f"Error procesando archivo adjunto: {e}")
+            QMessageBox.critical(self, "Error", f"Error procesando archivo: {str(e)}")
+    
+    def delete_attachment(self, attachment_id: int):
+        """Eliminar archivo adjunto"""
+        reply = QMessageBox.question(
+            self,
+            "Confirmar Eliminación",
+            "¿Está seguro de eliminar este archivo adjunto?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                if self.attachment_model.delete_attachment(attachment_id):
+                    QMessageBox.information(self, "Éxito", "Archivo eliminado")
+                    self.load_attachments()
+                else:
+                    QMessageBox.critical(self, "Error", "Error eliminando archivo")
+                    
+            except Exception as e:
+                logger.error(f"Error eliminando archivo: {e}")
+                QMessageBox.critical(self, "Error", f"Error eliminando archivo: {str(e)}")
+    
+    def preview_file(self, file_path: str):
+        """Mostrar vista previa del archivo"""
+        try:
+            if not os.path.exists(file_path):
+                QMessageBox.warning(self, "Error", "El archivo no existe")
+                return
+            
+            # Obtener tipo de archivo
+            ext = file_path.rsplit('.', 1)[1].lower() if '.' in file_path else ''
+            
+            # Para imágenes, mostrar en un diálogo
+            if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp']:
+                dialog = ImagePreviewDialog(file_path, self)
+                dialog.exec()
+            else:
+                # Para otros archivos, abrir con aplicación predeterminada
+                import subprocess
+                import platform
+                
+                if platform.system() == 'Windows':
+                    os.startfile(file_path)
+                elif platform.system() == 'Darwin':  # macOS
+                    subprocess.call(['open', file_path])
+                else:  # Linux
+                    subprocess.call(['xdg-open', file_path])
+                    
+        except Exception as e:
+            logger.error(f"Error mostrando vista previa: {e}")
+            QMessageBox.critical(self, "Error", f"Error mostrando archivo: {str(e)}")
     
     def check_compliance(self):
         """Verificar cumplimiento de la plantilla"""
@@ -350,6 +649,18 @@ class TemplatesWindow(QWidget):
             return
         
         result = self.twilio_service.check_template_compliance(content)
+        
+        # Verificar también archivos adjuntos
+        if self.current_template_id:
+            attachments = self.attachment_model.get_template_attachments(self.current_template_id)
+            if attachments:
+                total_size = sum(att['file_size'] for att in attachments) / (1024 * 1024)
+                if total_size > 16:
+                    result['compliant'] = False
+                    result['warnings'].append(
+                        f"El tamaño total de archivos adjuntos ({total_size:.1f}MB) "
+                        "excede el límite recomendado de 16MB"
+                    )
         
         if result['compliant']:
             QMessageBox.information(
@@ -427,11 +738,36 @@ class TemplatesWindow(QWidget):
         
         # Formatear mensaje
         formatted_message = self.twilio_service.format_message(content, contact_data)
+        
+        # Agregar información de archivos adjuntos
+        if self.current_template_id:
+            attachments = self.attachment_model.get_template_attachments(self.current_template_id)
+            if attachments:
+                formatted_message += "\n\n📎 Archivos adjuntos:"
+                for att in attachments:
+                    formatted_message += f"\n• {att['file_name']}"
+        
         self.preview_text.setText(formatted_message)
     
     def add_template(self):
         """Método público para agregar plantilla (llamado desde toolbar)"""
         self.new_template()
+    
+    def cancel_campaign(self, campaign_id: int):
+        """Cancelar campaña programada"""
+        reply = QMessageBox.question(
+            self,
+            "Confirmar Cancelación",
+            "¿Está seguro de cancelar esta campaña programada?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.scheduler.cancel_campaign(campaign_id):
+                QMessageBox.information(self, "Éxito", "Campaña cancelada")
+                self.load_campaigns()
+            else:
+                QMessageBox.critical(self, "Error", "Error cancelando campaña")
     
     def set_activity_logger(self, logger):
         """Configurar logger de actividades"""
@@ -495,3 +831,53 @@ class VariableDialog(QDialog):
             text = current_item.text()
             return text.split(' - ')[0].strip('{}')
         return None
+
+
+class ImagePreviewDialog(QDialog):
+    """Diálogo para vista previa de imágenes"""
+    
+    def __init__(self, image_path: str, parent=None):
+        super().__init__(parent)
+        self.image_path = image_path
+        self.init_ui()
+    
+    def init_ui(self):
+        """Inicializar interfaz"""
+        self.setWindowTitle("Vista Previa de Imagen")
+        self.setMinimumSize(400, 400)
+        
+        layout = QVBoxLayout()
+        
+        # Etiqueta para la imagen
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setStyleSheet("border: 1px solid #ddd; background-color: #f8f9fa;")
+        
+        # Cargar imagen
+        pixmap = QPixmap(self.image_path)
+        if not pixmap.isNull():
+            # Escalar imagen manteniendo proporción
+            scaled_pixmap = pixmap.scaled(
+                600, 600,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.image_label.setPixmap(scaled_pixmap)
+        else:
+            self.image_label.setText("No se pudo cargar la imagen")
+        
+        layout.addWidget(self.image_label)
+        
+        # Información de la imagen
+        file_name = os.path.basename(self.image_path)
+        file_size = os.path.getsize(self.image_path) / (1024 * 1024)
+        info_label = QLabel(f"Archivo: {file_name} | Tamaño: {file_size:.2f} MB")
+        info_label.setStyleSheet("color: #666; padding: 10px;")
+        layout.addWidget(info_label)
+        
+        # Botón cerrar
+        close_btn = QPushButton("Cerrar")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+        
+        self.setLayout(layout)

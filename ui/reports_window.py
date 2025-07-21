@@ -85,16 +85,48 @@ class ReportsWindow(QWidget):
         self.details_table.verticalHeader().setDefaultSectionSize(35)
         self.details_table.verticalHeader().setVisible(True)
         
-        # Estilos para mejorar la visualización
+        # Configurar header para evitar movimientos
+        header = self.details_table.horizontalHeader()
+        header.setHighlightSections(False)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        
+        # Estilos mejorados para prevenir saltos visuales
         self.details_table.setStyleSheet("""
             QTableWidget {
                 gridline-color: #ddd;
                 font-size: 13px;
+                selection-background-color: #e3f2fd;
             }
             QTableWidget::item {
                 padding: 8px;
+                border: none;
+            }
+            QTableWidget::item:selected {
+                background-color: #e3f2fd;
+                color: black;
+            }
+            QHeaderView::section {
+                background-color: #f8f9fa;
+                padding: 10px;
+                font-weight: bold;
+                border: none;
+                border-right: 1px solid #ddd;
+                border-bottom: 1px solid #ddd;
+            }
+            QHeaderView::section:hover {
+                background-color: #e9ecef;
+            }
+            QTableWidget QTableCornerButton::section {
+                background-color: #f8f9fa;
+                border: none;
+                border-right: 1px solid #ddd;
+                border-bottom: 1px solid #ddd;
             }
         """)
+        
+        # Deshabilitar ordenamiento inicialmente
+        self.details_table.setSortingEnabled(False)
         
         layout.addWidget(self.details_table)
         
@@ -214,6 +246,9 @@ class ReportsWindow(QWidget):
     
     def load_details_table(self):
         """Cargar tabla de detalles según tipo de reporte"""
+        # Deshabilitar ordenamiento mientras se cargan datos
+        self.details_table.setSortingEnabled(False)
+        
         report_type = self.report_type_combo.currentText()
         
         if report_type == "Resumen General":
@@ -224,6 +259,9 @@ class ReportsWindow(QWidget):
             self.load_status_report()
         elif report_type == "Actividad de Usuarios":
             self.load_activity_report()
+        
+        # Habilitar ordenamiento después de cargar datos
+        self.details_table.setSortingEnabled(True)
     
     def load_general_summary(self):
         """Cargar resumen general"""
@@ -231,6 +269,15 @@ class ReportsWindow(QWidget):
             # Configurar tabla
             self.details_table.setColumnCount(2)
             self.details_table.setHorizontalHeaderLabels(["Métrica", "Valor"])
+            
+            # Configurar anchos de columna
+            header = self.details_table.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+            header.setStretchLastSection(True)
+            
+            self.details_table.setColumnWidth(0, 300)
+            self.details_table.setColumnWidth(1, 150)
             
             # Obtener estadísticas
             stats = self.message_model.get_message_stats()
@@ -261,10 +308,11 @@ class ReportsWindow(QWidget):
             for row, (metric, value) in enumerate(data):
                 self.details_table.setItem(row, 0, QTableWidgetItem(metric))
                 self.details_table.setItem(row, 1, QTableWidgetItem(value))
-            
-            # Ajustar columnas
-            header = self.details_table.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+                
+                # Alinear valores a la derecha
+                value_item = self.details_table.item(row, 1)
+                if value_item:
+                    value_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             
         except Exception as e:
             logger.error(f"Error cargando resumen general: {e}")
@@ -282,10 +330,12 @@ class ReportsWindow(QWidget):
             
             # Configurar anchos de columna
             header = self.details_table.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
             for i in range(1, 8):
                 header.setSectionResizeMode(i, QHeaderView.ResizeMode.Fixed)
+            header.setStretchLastSection(True)
             
+            self.details_table.setColumnWidth(0, 250)  # Campaña
             self.details_table.setColumnWidth(1, 150)  # Fecha
             self.details_table.setColumnWidth(2, 80)   # Total
             self.details_table.setColumnWidth(3, 80)   # Enviados
@@ -304,22 +354,28 @@ class ReportsWindow(QWidget):
                     campaign['created_at'].strftime('%Y-%m-%d %H:%M') 
                     if campaign['created_at'] else ''
                 ))
-                self.details_table.setItem(row, 2, QTableWidgetItem(str(campaign['total_contacts'])))
-                self.details_table.setItem(row, 3, QTableWidgetItem(str(campaign['sent_messages'])))
-                self.details_table.setItem(row, 4, QTableWidgetItem(str(campaign['delivered'])))
-                self.details_table.setItem(row, 5, QTableWidgetItem(str(campaign['read'])))
-                self.details_table.setItem(row, 6, QTableWidgetItem(str(campaign['failed'])))
+                
+                # Números alineados a la derecha
+                for col, value in enumerate([
+                    campaign['total_contacts'],
+                    campaign['sent_messages'],
+                    campaign['delivered'],
+                    campaign['read'],
+                    campaign['failed']
+                ], start=2):
+                    item = QTableWidgetItem(str(value))
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    self.details_table.setItem(row, col, item)
                 
                 # Calcular tasa de éxito
                 if campaign['sent_messages'] > 0:
                     success_rate = (campaign['delivered'] / campaign['sent_messages']) * 100
-                    self.details_table.setItem(row, 7, QTableWidgetItem(f"{success_rate:.1f}%"))
+                    rate_item = QTableWidgetItem(f"{success_rate:.1f}%")
                 else:
-                    self.details_table.setItem(row, 7, QTableWidgetItem("0%"))
-            
-            # Ajustar columnas
-            header = self.details_table.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+                    rate_item = QTableWidgetItem("0%")
+                
+                rate_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.details_table.setItem(row, 7, rate_item)
             
         except Exception as e:
             logger.error(f"Error cargando reporte por campaña: {e}")
@@ -330,6 +386,17 @@ class ReportsWindow(QWidget):
             # Configurar tabla
             self.details_table.setColumnCount(3)
             self.details_table.setHorizontalHeaderLabels(["Estado", "Cantidad", "Porcentaje"])
+            
+            # Configurar anchos
+            header = self.details_table.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+            header.setStretchLastSection(True)
+            
+            self.details_table.setColumnWidth(0, 200)
+            self.details_table.setColumnWidth(1, 100)
+            self.details_table.setColumnWidth(2, 100)
             
             # Obtener estadísticas
             stats = self.message_model.get_message_stats()
@@ -357,18 +424,21 @@ class ReportsWindow(QWidget):
             
             for row, (status, count) in enumerate(statuses):
                 self.details_table.setItem(row, 0, QTableWidgetItem(status))
-                self.details_table.setItem(row, 1, QTableWidgetItem(str(count)))
+                
+                # Cantidad alineada a la derecha
+                count_item = QTableWidgetItem(str(count))
+                count_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.details_table.setItem(row, 1, count_item)
                 
                 # Calcular porcentaje
                 if total > 0:
                     percentage = (count / total) * 100
-                    self.details_table.setItem(row, 2, QTableWidgetItem(f"{percentage:.1f}%"))
+                    perc_item = QTableWidgetItem(f"{percentage:.1f}%")
                 else:
-                    self.details_table.setItem(row, 2, QTableWidgetItem("0%"))
-            
-            # Ajustar columnas
-            header = self.details_table.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+                    perc_item = QTableWidgetItem("0%")
+                
+                perc_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.details_table.setItem(row, 2, perc_item)
             
         except Exception as e:
             logger.error(f"Error cargando reporte por estado: {e}")
@@ -382,6 +452,19 @@ class ReportsWindow(QWidget):
             self.details_table.setHorizontalHeaderLabels([
                 "Usuario", "Acción", "Detalles", "Fecha"
             ])
+            
+            # Configurar anchos
+            header = self.details_table.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+            header.setStretchLastSection(True)
+            
+            self.details_table.setColumnWidth(0, 100)
+            self.details_table.setColumnWidth(1, 150)
+            self.details_table.setColumnWidth(2, 350)
+            self.details_table.setColumnWidth(3, 150)
             
             # Obtener actividades recientes
             user = auth_manager.get_current_user()
@@ -414,10 +497,6 @@ class ReportsWindow(QWidget):
                     self.details_table.setItem(row, 3, QTableWidgetItem(
                         created_at.strftime('%Y-%m-%d %H:%M:%S')
                     ))
-            
-            # Ajustar columnas
-            header = self.details_table.horizontalHeader()
-            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
             
         except Exception as e:
             logger.error(f"Error cargando reporte de actividad: {e}")

@@ -133,7 +133,9 @@ class CampaignsWindow(QWidget):
         ])
         
         header = self.history_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        
+        # Configurar modo de redimensionamiento ANTES de establecer anchos
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
@@ -141,6 +143,8 @@ class CampaignsWindow(QWidget):
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         
+        # Establecer anchos de columna
+        self.history_table.setColumnWidth(0, 250)  # Campaña
         self.history_table.setColumnWidth(1, 150)  # Fecha
         self.history_table.setColumnWidth(2, 80)   # Total
         self.history_table.setColumnWidth(3, 80)   # Enviados
@@ -148,12 +152,46 @@ class CampaignsWindow(QWidget):
         self.history_table.setColumnWidth(5, 80)   # Leídos
         self.history_table.setColumnWidth(6, 80)   # Fallidos
         
+        # Configurar header para evitar movimientos
+        header.setHighlightSections(False)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setStretchLastSection(True)
+        
         # Configurar altura de filas
         self.history_table.verticalHeader().setDefaultSectionSize(35)
         self.history_table.verticalHeader().setVisible(True)
         
+        # Estilos mejorados
+        self.history_table.setStyleSheet("""
+            QTableWidget {
+                gridline-color: #ddd;
+                font-size: 13px;
+                selection-background-color: #e3f2fd;
+            }
+            QTableWidget::item {
+                padding: 8px;
+                border: none;
+            }
+            QTableWidget::item:selected {
+                background-color: #e3f2fd;
+                color: black;
+            }
+            QHeaderView::section {
+                background-color: #f8f9fa;
+                padding: 10px;
+                font-weight: bold;
+                border: none;
+                border-right: 1px solid #ddd;
+                border-bottom: 1px solid #ddd;
+            }
+            QHeaderView::section:hover {
+                background-color: #e9ecef;
+            }
+        """)
+        
         self.history_table.setAlternatingRowColors(True)
-        self.history_table.setSortingEnabled(True)
+        self.history_table.setSortingEnabled(False)  # Se habilitará después de cargar datos
         
         layout.addWidget(self.history_table)
         
@@ -173,15 +211,56 @@ class CampaignsWindow(QWidget):
         ])
         
         header = self.scheduled_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        
+        # Configurar modo de redimensionamiento
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         
+        # Establecer anchos
+        self.scheduled_table.setColumnWidth(0, 200)  # Campaña
+        self.scheduled_table.setColumnWidth(1, 200)  # Plantilla
         self.scheduled_table.setColumnWidth(2, 150)  # Fecha
         self.scheduled_table.setColumnWidth(3, 100)  # Contactos
         self.scheduled_table.setColumnWidth(4, 120)  # Acciones
+        
+        # Configurar header
+        header.setHighlightSections(False)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setStretchLastSection(True)
+        
+        # Aplicar los mismos estilos
+        self.scheduled_table.setStyleSheet("""
+            QTableWidget {
+                gridline-color: #ddd;
+                font-size: 13px;
+                selection-background-color: #e3f2fd;
+            }
+            QTableWidget::item {
+                padding: 8px;
+                border: none;
+            }
+            QTableWidget::item:selected {
+                background-color: #e3f2fd;
+                color: black;
+            }
+            QHeaderView::section {
+                background-color: #f8f9fa;
+                padding: 10px;
+                font-weight: bold;
+                border: none;
+                border-right: 1px solid #ddd;
+                border-bottom: 1px solid #ddd;
+            }
+            QHeaderView::section:hover {
+                background-color: #e9ecef;
+            }
+        """)
+        
+        self.scheduled_table.setSortingEnabled(False)
         
         layout.addWidget(self.scheduled_table)
         
@@ -191,6 +270,10 @@ class CampaignsWindow(QWidget):
     def load_campaigns(self):
         """Cargar todas las campañas"""
         try:
+            # Deshabilitar ordenamiento temporalmente
+            self.history_table.setSortingEnabled(False)
+            self.scheduled_table.setSortingEnabled(False)
+            
             # Cargar estadísticas para historial
             stats = self.campaign_model.get_campaign_stats()
             self.populate_history_table(stats)
@@ -200,6 +283,10 @@ class CampaignsWindow(QWidget):
             
             # Actualizar campañas activas
             self.update_active_campaigns()
+            
+            # Habilitar ordenamiento
+            self.history_table.setSortingEnabled(True)
+            self.scheduled_table.setSortingEnabled(True)
             
         except Exception as e:
             logger.error(f"Error cargando campañas: {e}")
@@ -222,7 +309,9 @@ class CampaignsWindow(QWidget):
             # Colorear filas según estado
             if stat['failed'] > 0:
                 for col in range(7):
-                    self.history_table.item(row, col).setBackground(QColor(255, 230, 230))
+                    item = self.history_table.item(row, col)
+                    if item:
+                        item.setBackground(QColor(255, 230, 230))
     
     def load_scheduled_campaigns(self):
         """Cargar campañas programadas"""
