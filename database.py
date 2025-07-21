@@ -255,6 +255,29 @@ class CampaignModel:
             result['total_contacts'] = result.get('total_contacts') or 0
         
         return results
+    
+    def get_scheduled_campaigns(self) -> List[Dict]:
+        """Obtener campañas programadas (pendientes con fecha futura)"""
+        query = """
+            SELECT 
+                c.id,
+                c.name,
+                c.scheduled_at,
+                c.total_contacts,
+                c.status,
+                c.created_at,
+                t.id as template_id,
+                t.name as template_name,
+                u.username as created_by_username
+            FROM campaigns c
+            JOIN templates t ON c.template_id = t.id
+            LEFT JOIN users u ON c.created_by = u.id
+            WHERE c.status = 'pending' 
+            AND c.scheduled_at IS NOT NULL
+            AND c.scheduled_at > NOW()
+            ORDER BY c.scheduled_at ASC
+        """
+        return self.db.execute_query(query)
 
 class MessageModel:
     def __init__(self):

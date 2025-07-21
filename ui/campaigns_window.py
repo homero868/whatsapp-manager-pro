@@ -205,10 +205,13 @@ class CampaignsWindow(QWidget):
         
         # Tabla de programadas
         self.scheduled_table = QTableWidget()
-        self.scheduled_table.setColumnCount(5)
+        self.scheduled_table.setColumnCount(6)
         self.scheduled_table.setHorizontalHeaderLabels([
-            "Campaña", "Plantilla", "Fecha Programada", "Contactos", "Acciones"
+            "Campaña", "Plantilla", "Fecha", "Hora", "Contactos", "Acciones"
         ])
+        
+        # Hacer la tabla de solo lectura
+        self.scheduled_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         
         header = self.scheduled_table.horizontalHeader()
         
@@ -218,19 +221,26 @@ class CampaignsWindow(QWidget):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         
-        # Establecer anchos
-        self.scheduled_table.setColumnWidth(0, 200)  # Campaña
-        self.scheduled_table.setColumnWidth(1, 200)  # Plantilla
-        self.scheduled_table.setColumnWidth(2, 150)  # Fecha
-        self.scheduled_table.setColumnWidth(3, 100)  # Contactos
-        self.scheduled_table.setColumnWidth(4, 120)  # Acciones
+        # Establecer anchos mejorados
+        self.scheduled_table.setColumnWidth(0, 350)  # Campaña (aumentado de 250)
+        self.scheduled_table.setColumnWidth(1, 330)  # Plantilla (aumentado de 250)
+        self.scheduled_table.setColumnWidth(2, 155)  # Fecha
+        self.scheduled_table.setColumnWidth(3, 90)   # Hora
+        self.scheduled_table.setColumnWidth(4, 120)  # Contactos
+        self.scheduled_table.setColumnWidth(5, 5)  # Acciones (aumentado de 100 para los botones con texto)
         
         # Configurar header
         header.setHighlightSections(False)
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(True)
         header.setStretchLastSection(True)
+        
+        # Configurar altura de filas más grande
+        self.scheduled_table.verticalHeader().setDefaultSectionSize(50)  # Aumentado de 45 a 50
+        self.scheduled_table.verticalHeader().setMinimumSectionSize(50)  # Mínimo también en 50
+        self.scheduled_table.verticalHeader().setVisible(True)
         
         # Aplicar los mismos estilos
         self.scheduled_table.setStyleSheet("""
@@ -240,7 +250,7 @@ class CampaignsWindow(QWidget):
                 selection-background-color: #e3f2fd;
             }
             QTableWidget::item {
-                padding: 8px;
+                padding: 10px;
                 border: none;
             }
             QTableWidget::item:selected {
@@ -270,6 +280,9 @@ class CampaignsWindow(QWidget):
     def load_campaigns(self):
         """Cargar todas las campañas"""
         try:
+            # Limpiar spans anteriores en la tabla de programadas
+            self.scheduled_table.clearSpans()
+            
             # Deshabilitar ordenamiento temporalmente
             self.history_table.setSortingEnabled(False)
             self.scheduled_table.setSortingEnabled(False)
@@ -315,8 +328,207 @@ class CampaignsWindow(QWidget):
     
     def load_scheduled_campaigns(self):
         """Cargar campañas programadas"""
-        # Por implementar: cargar campañas con estado 'pending' y scheduled_at futuro
-        pass
+        try:
+            # Obtener campañas programadas desde la base de datos
+            scheduled = self.campaign_model.get_scheduled_campaigns()
+            
+            # Configurar tabla
+            self.scheduled_table.setRowCount(len(scheduled))
+            
+            if len(scheduled) == 0:
+                # Si no hay campañas, mostrar mensaje
+                self.scheduled_table.setRowCount(1)
+                item = QTableWidgetItem("No hay campañas programadas")
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setForeground(QColor(150, 150, 150))
+                self.scheduled_table.setItem(0, 0, item)
+                self.scheduled_table.setSpan(0, 0, 1, 6)  # Combinar todas las columnas
+                return
+            
+            for row, campaign in enumerate(scheduled):
+                # Nombre de campaña
+                name_item = QTableWidgetItem(campaign['name'])
+                name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                self.scheduled_table.setItem(row, 0, name_item)
+                
+                # Plantilla
+                template_item = QTableWidgetItem(campaign.get('template_name', 'N/A'))
+                template_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                self.scheduled_table.setItem(row, 1, template_item)
+                
+                # Fecha y hora
+                scheduled_at = campaign.get('scheduled_at')
+                if scheduled_at:
+                    # Separar fecha y hora
+                    date_str = scheduled_at.strftime('%Y-%m-%d')
+                    time_str = scheduled_at.strftime('%H:%M')
+                    
+                    date_item = QTableWidgetItem(date_str)
+                    date_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter)
+                    self.scheduled_table.setItem(row, 2, date_item)
+                    
+                    time_item = QTableWidgetItem(time_str)
+                    time_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter)
+                    self.scheduled_table.setItem(row, 3, time_item)
+                    
+                    # Colorear según proximidad
+                    time_until = (scheduled_at - datetime.now()).total_seconds()
+                    if time_until < 3600:  # Menos de 1 hora
+                        color = QColor(255, 200, 200)  # Rojo claro
+                    elif time_until < 86400:  # Menos de 24 horas
+                        color = QColor(255, 255, 200)  # Amarillo claro
+                    else:
+                        color = None
+                    
+                    if color:
+                        for col in range(5):
+                            item = self.scheduled_table.item(row, col)
+                            if item:
+                                item.setBackground(color)
+                else:
+                    na_date = QTableWidgetItem('N/A')
+                    na_date.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter)
+                    self.scheduled_table.setItem(row, 2, na_date)
+                    
+                    na_time = QTableWidgetItem('N/A')
+                    na_time.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter)
+                    self.scheduled_table.setItem(row, 3, na_time)
+                
+                # Total contactos
+                contacts_item = QTableWidgetItem(str(campaign.get('total_contacts', 0)))
+                contacts_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter)
+                self.scheduled_table.setItem(row, 4, contacts_item)
+                
+                # Botones de acción
+                actions_widget = QWidget()
+                actions_layout = QHBoxLayout()
+                actions_layout.setContentsMargins(2, 0, 2, 0)
+                actions_layout.setSpacing(4)  # Espacio entre botones
+                
+                # Botón editar
+                edit_btn = QPushButton("✏️ Editar")
+                edit_btn.setFixedSize(75, 28)
+                edit_btn.setToolTip("Editar campaña programada")
+                edit_btn.clicked.connect(lambda checked, c=campaign: self.edit_scheduled_campaign(c))
+                edit_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #007bff;
+                        color: white;
+                        border: none;
+                        padding: 2px 5px;
+                        border-radius: 3px;
+                        font-size: 12px;
+                        font-weight: 500;
+                    }
+                    QPushButton:hover {
+                        background-color: #0056b3;
+                    }
+                """)
+                
+                # Botón cancelar
+                cancel_btn = QPushButton("❌ Cancelar")
+                cancel_btn.setFixedSize(85, 28)
+                cancel_btn.setToolTip("Cancelar campaña programada")
+                cancel_btn.clicked.connect(lambda checked, cid=campaign['id']: self.cancel_scheduled_campaign(cid))
+                cancel_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #dc3545;
+                        color: white;
+                        border: none;
+                        padding: 2px 5px;
+                        border-radius: 3px;
+                        font-size: 12px;
+                        font-weight: 500;
+                    }
+                    QPushButton:hover {
+                        background-color: #c82333;
+                    }
+                """)
+                
+                actions_layout.addWidget(edit_btn)
+                actions_layout.addWidget(cancel_btn)
+                actions_layout.addStretch()
+                
+                actions_widget.setLayout(actions_layout)
+                self.scheduled_table.setCellWidget(row, 5, actions_widget)
+            
+        except Exception as e:
+            logger.error(f"Error cargando campañas programadas: {e}")
+            # Mostrar mensaje de error en la tabla
+            self.scheduled_table.setRowCount(1)
+            self.scheduled_table.setItem(0, 0, QTableWidgetItem(f"Error cargando campañas: {str(e)}"))
+            self.scheduled_table.setSpan(0, 0, 1, 6)
+    
+    def cancel_scheduled_campaign(self, campaign_id: int):
+        """Cancelar una campaña programada"""
+        reply = QMessageBox.question(
+            self,
+            "Confirmar Cancelación",
+            "¿Está seguro de cancelar esta campaña programada?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                if self.scheduler.cancel_campaign(campaign_id):
+                    QMessageBox.information(self, "Éxito", "Campaña cancelada exitosamente")
+                    self.load_campaigns()  # Recargar todas las campañas
+                    
+                    if self.activity_logger:
+                        self.activity_logger.log_campaign(
+                            f"Campaña ID: {campaign_id}",
+                            "CANCEL",
+                            "Campaña programada cancelada"
+                        )
+                else:
+                    QMessageBox.critical(self, "Error", "No se pudo cancelar la campaña")
+                    
+            except Exception as e:
+                logger.error(f"Error cancelando campaña: {e}")
+                QMessageBox.critical(self, "Error", f"Error cancelando campaña: {str(e)}")
+    
+    def edit_scheduled_campaign(self, campaign: dict):
+        """Editar una campaña programada"""
+        dialog = EditScheduledCampaignDialog(campaign, self.template_model, self)
+        if dialog.exec():
+            name = dialog.get_campaign_name()
+            template_id = dialog.get_template_id()
+            scheduled_dt = dialog.get_scheduled_datetime()
+            
+            try:
+                # Actualizar campaña en la base de datos
+                from database import DatabaseManager
+                db = DatabaseManager()
+                
+                query = """
+                    UPDATE campaigns 
+                    SET name = %s, template_id = %s, scheduled_at = %s
+                    WHERE id = %s AND status = 'pending'
+                """
+                
+                success = db.execute_update(
+                    query,
+                    (name, template_id, scheduled_dt.strftime('%Y-%m-%d %H:%M:%S'), campaign['id'])
+                )
+                
+                if success:
+                    QMessageBox.information(
+                        self,
+                        "Éxito",
+                        f"La campaña '{name}' ha sido actualizada exitosamente"
+                    )
+                    
+                    self.load_campaigns()
+                    
+                    if self.activity_logger:
+                        self.activity_logger.log_campaign(name, "UPDATE", 
+                                                        f"Nueva fecha: {scheduled_dt.strftime('%Y-%m-%d %H:%M')}")
+                else:
+                    QMessageBox.critical(self, "Error", "No se pudo actualizar la campaña")
+                    
+            except Exception as e:
+                logger.error(f"Error actualizando campaña: {e}")
+                QMessageBox.critical(self, "Error", f"Error actualizando campaña: {str(e)}")
     
     def update_active_campaigns(self):
         """Actualizar lista de campañas activas"""
@@ -775,6 +987,141 @@ class ScheduleCampaignDialog(QDialog):
                 
         except Exception as e:
             logger.error(f"Error cargando plantillas: {e}")
+    
+    def validate_and_accept(self):
+        """Validar y aceptar"""
+        if not self.name_input.text().strip():
+            QMessageBox.warning(self, "Aviso", "El nombre de la campaña es requerido")
+            return
+        
+        if self.template_combo.currentData() is None:
+            QMessageBox.warning(self, "Aviso", "Debe seleccionar una plantilla")
+            return
+        
+        if self.datetime_edit.dateTime() <= QDateTime.currentDateTime():
+            QMessageBox.warning(self, "Aviso", "La fecha debe ser futura")
+            return
+        
+        self.accept()
+    
+    def get_campaign_name(self):
+        """Obtener nombre de campaña"""
+        return self.name_input.text().strip()
+    
+    def get_template_id(self):
+        """Obtener ID de plantilla"""
+        return self.template_combo.currentData()
+    
+    def get_scheduled_datetime(self):
+        """Obtener fecha y hora programada"""
+        return self.datetime_edit.dateTime().toPyDateTime()
+
+
+class EditScheduledCampaignDialog(QDialog):
+    """Diálogo para editar campaña programada"""
+    
+    def __init__(self, campaign: dict, template_model, parent=None):
+        super().__init__(parent)
+        self.campaign = campaign
+        self.template_model = template_model
+        self.init_ui()
+        self.load_templates()
+        self.load_campaign_data()
+    
+    def init_ui(self):
+        """Inicializar interfaz"""
+        self.setWindowTitle("Editar Campaña Programada")
+        self.setFixedSize(400, 350)
+        
+        layout = QVBoxLayout()
+        
+        # Nombre de campaña
+        layout.addWidget(QLabel("Nombre de la Campaña:"))
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Ej: Promoción Navideña")
+        layout.addWidget(self.name_input)
+        
+        # Plantilla
+        layout.addWidget(QLabel("Plantilla:"))
+        self.template_combo = QComboBox()
+        layout.addWidget(self.template_combo)
+        
+        # Fecha y hora
+        layout.addWidget(QLabel("Fecha y Hora de Envío:"))
+        self.datetime_edit = QDateTimeEdit()
+        self.datetime_edit.setCalendarPopup(True)
+        self.datetime_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        layout.addWidget(self.datetime_edit)
+        
+        # Información
+        info_label = QLabel(
+            "ℹ️ Puede modificar el nombre, plantilla y fecha de envío. "
+            "La campaña se enviará a todos los contactos disponibles."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #666; padding: 10px; background-color: #f8f9fa;")
+        layout.addWidget(info_label)
+        
+        layout.addStretch()
+        
+        # Botones
+        buttons_layout = QHBoxLayout()
+        
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel_btn)
+        
+        self.save_btn = QPushButton("Guardar Cambios")
+        self.save_btn.clicked.connect(self.validate_and_accept)
+        self.save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                border: none;
+                padding: 8px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #218838;
+            }
+        """)
+        buttons_layout.addWidget(self.save_btn)
+        
+        layout.addLayout(buttons_layout)
+        
+        self.setLayout(layout)
+    
+    def load_templates(self):
+        """Cargar plantillas"""
+        try:
+            templates = self.template_model.get_templates()
+            self.template_combo.clear()
+            
+            for template in templates:
+                self.template_combo.addItem(template['name'], template['id'])
+                
+        except Exception as e:
+            logger.error(f"Error cargando plantillas: {e}")
+    
+    def load_campaign_data(self):
+        """Cargar datos de la campaña"""
+        # Nombre
+        self.name_input.setText(self.campaign['name'])
+        
+        # Plantilla
+        template_id = self.campaign.get('template_id')
+        if template_id:
+            for i in range(self.template_combo.count()):
+                if self.template_combo.itemData(i) == template_id:
+                    self.template_combo.setCurrentIndex(i)
+                    break
+        
+        # Fecha y hora
+        scheduled_at = self.campaign.get('scheduled_at')
+        if scheduled_at:
+            qdt = QDateTime.fromString(scheduled_at.strftime('%Y-%m-%d %H:%M:%S'), 'yyyy-MM-dd HH:mm:ss')
+            self.datetime_edit.setDateTime(qdt)
     
     def validate_and_accept(self):
         """Validar y aceptar"""
